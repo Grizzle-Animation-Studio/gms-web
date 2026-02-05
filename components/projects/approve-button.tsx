@@ -19,7 +19,7 @@ export function ApproveProjectButton({ projectId }: { projectId: string }) {
         const result = await approveProject(projectId);
         setLoading(false);
 
-        if (result.error) {
+        if ('error' in result && result.error) {
             setDebugInfo({ error: result.error }); // Show error in debug block
             alert(result.error);
         } else {

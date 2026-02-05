@@ -1,0 +1,335 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// COMPANY MODEL - Represents business entities (formerly "Client")
+// =============================================================================
+model Company {
+  id        String    @id @default(cuid())
+  name      String
+  
+  // Company-level Contact Information (generic/main line)
+  companyEmail String?
+  companyPhone String?
+  
+  // Address
+  street    String?
+  city      String?
+  state     String?
+  postcode  String?
+  
+  // Business Details
+  abn       String?   // Australian Business Number
+  website   String?   // Company website URL (inferred from email domain or manually set)
+  logoUrl   String?   // Path or URL to company logo
+  
+  // Xero Integration
+  xeroContactId String?   @unique  // Maps to Xero Customer ID
+  xeroSyncedAt  DateTime?
+  
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  
+  // Relations
+  projects         Project[]
+  enquiries        Enquiry[]
+  contactsClientSide ContactClientSide[]  // Individual contacts at this company
+}
+
+// =============================================================================
+// CONTACT (CLIENT-SIDE) MODEL - Individuals representing companies
+// =============================================================================
+model ContactClientSide {
+  id        String    @id @default(cuid())
+  
+  // Person Details
+  firstName String
+  lastName  String?
+  email     String?
+  phone     String?
+  jobTitle  String?   // e.g., "Marketing Manager"
+  
+  // Relationship
+  companyId String
+  company   Company   @relation(fields: [companyId], references: [id], onDelete: Cascade)
+  
+  isPrimary Boolean   @default(false)  // Mark primary contact per company
+  
+  // Xero Integration (Xero Contact on Customer)
+  xeroContactId String?   @unique
+  xeroSyncedAt  DateTime?
+  
+  // Tracking
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  
+  enquiries Enquiry[] // Contacts can make multiple enquiries
+  projects  Project[] // Projects linked to this contact
+}
+
+// =============================================================================
+// FREELANCER MODEL - Individual freelancers with skills and rates
+// =============================================================================
+model ContactFreelancer {
+  id        String    @id @default(cuid())
+  
+  // Person Details
+  firstName String
+  lastName  String?
+  email     String?
+  phone     String?
+  
+  // Freelancer Specific
+  skills       String?   // Comma-separated or JSON array of skills
+  dayRate      String?   // Stored as string for flexibility (e.g., "$500", "$400-600")
+  hourlyRate   String?
+  availability String?   // e.g., "Full-time", "20 hrs/week", "Available from March"
+  notes        String?   // General notes about the freelancer
+  
+  // Xero Integration (Xero Customer in Freelancers group)
+  xeroContactId String?   @unique
+  xeroSyncedAt  DateTime?
+  
+  // Tracking
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  
+  // Future: timesheets, invoices, etc.
+}
+
+// =============================================================================
+// ENQUIRY MODEL - Incoming project enquiries
+// =============================================================================
+model Enquiry {
+  id          String        @id @default(cuid())
+  rawContent  String
+  
+  // Extracted Information (from AI parsing)
+  projectTitle       String?
+  projectSummary     String?   // Short 1-2 sentence overview
+  projectDescription String?   // Longer detailed description
+  budget            String?   // Legacy field for backward compatibility
+  budgetMin         String?   // Minimum budget in range
+  budgetMax         String?   // Maximum budget in range
+  timeline          String?   // e.g., "2 weeks", "End of March"
+  
+  // Job Details - Technical Specifications (LEGACY - use deliverables relation instead)
+  framerate        String?   // e.g., "24fps", "30fps", "60fps" - DEPRECATED
+  aspectRatio      String?   // e.g., "16:9", "9:16", "1:1" - DEPRECATED
+  tone             String?   // e.g., "Corporate", "Energetic", "Minimal"
+  referenceLinks   String?   // JSON array of extracted URLs - displayed as thumbnails
+  numberOfDeliverables Int?  // Count of expected outputs - DEPRECATED (use deliverables.length)
+
+  receivedAt  DateTime      @default(now())
+  status             String   @default("NEW") // NEW, IN_PROGRESS, CONVERTED, ARCHIVED
+  
+  // Dropbox integration - temporary folder for enquiry attachments
+  dropboxEnquiryPath String?  // Path to temporary enquiry folder before project conversion
+  
+  companyId String?
+  company   Company? @relation(fields: [companyId], references: [id], onDelete: SetNull)
+  
+  contactId String?
+  contact   ContactClientSide? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+  
+  projectId String?  @unique
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  
+  // Relations
+  attachments EnquiryAttachment[]
+  activities  EnquiryActivity[]
+  deliverables EnquiryDeliverable[]
+}
+
+// =============================================================================
+// ENQUIRY DELIVERABLE MODEL - Individual deliverable specifications for enquiries
+// =============================================================================
+model EnquiryDeliverable {
+  id       String  @id @default(cuid())
+  
+  enquiryId String
+  enquiry   Enquiry @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  
+  name         String?  // e.g., "Instagram Reel", "YouTube Ad", "Main Edit"
+  frameRate    String?  // e.g., "24fps", "30fps", "60fps"
+  width        Int?     // e.g., 1920
+  height       Int?     // e.g., 1080
+  aspectRatio  String?  // e.g., "16:9", "9:16", "1:1"
+  duration     String?  // e.g., "30 seconds", "2 minutes"
+  description  String?  // Additional details about this deliverable
+  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// =============================================================================
+// ENQUIRY ATTACHMENT MODEL - Files attached to enquiries
+// =============================================================================
+model EnquiryAttachment {
+  id          String   @id @default(cuid())
+  enquiryId   String
+  enquiry     Enquiry  @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  
+  filename    String
+  fileSize    Int      // in bytes
+  mimeType    String?
+  
+  // Dropbox integration
+  dropboxPath String?
+  dropboxUrl  String?  // Temporary download URL (expires)
+  
+  // Production tracking - for moving files from enquiry to project folder
+  movedToProduction Boolean @default(false)
+  productionPath    String?  // Path after moving to project folder
+  
+  uploadedAt  DateTime @default(now())
+  uploadedBy  String?  // For future user tracking
+  
+  @@index([enquiryId])
+}
+
+// =============================================================================
+// ENQUIRY ACTIVITY MODEL - Timeline of meetings, notes, emails, calls
+// =============================================================================
+model EnquiryActivity {
+  id          String   @id @default(cuid())
+  enquiryId   String
+  enquiry     Enquiry  @relation(fields: [enquiryId], references: [id], onDelete: Cascade)
+  
+  type        String   // "MEETING", "EMAIL", "CALL", "NOTE", "STATUS_CHANGE"
+  title       String?
+  content     String   // The actual notes/transcript
+  
+  // Optional metadata
+  meetingDate DateTime?
+  attendees   String?  // JSON array of attendee names
+  
+  createdAt   DateTime @default(now())
+  createdBy   String?  // For future user tracking
+  
+  @@index([enquiryId])
+  @@index([createdAt])
+}
+
+// =============================================================================
+// PROJECT MODEL - Active client projects
+// =============================================================================
+model Project {
+  id              String        @id @default(cuid())
+  title           String
+  description     String?       // Project description/summary
+  status          String        @default("PROPOSED")
+  dropboxPath     String?       // Folder path in Dropbox
+  dropboxFolderUrl String?      // Direct URL to Dropbox folder
+  budget          String?       // Legacy field for backward compatibility
+  budgetMin       String?       // Minimum budget in range
+  budgetMax       String?       // Maximum budget in range
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  companyId   String
+  company     Company       @relation(fields: [companyId], references: [id])
+  
+  contactId   String?
+  contact     ContactClientSide? @relation(fields: [contactId], references: [id])
+  
+  enquiry     Enquiry?
+  deliverables Deliverable[]
+  checklistItems ChecklistItem[]
+}
+
+// =============================================================================
+// DELIVERABLE MODEL - Individual output specifications for projects
+// =============================================================================
+model Deliverable {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  name        String   // "Deliverable 01", "Deliverable 02", "Social Cut", etc.
+  frameRate   String?  // "25fps", "30fps", "60fps"
+  width       Int?     // 1920, 1080, etc.
+  height      Int?     // 1080, 1920, etc.
+  aspectRatio String?  // "16:9", "9:16", "1:1"
+  duration    String?  // "30s", "60s", etc.
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  @@index([projectId])
+}
+
+// =============================================================================
+// CHECKLIST TEMPLATE MODEL - Reusable checklist templates
+// =============================================================================
+model ChecklistTemplate {
+  id          String   @id @default(cuid())
+  name        String   // e.g., "Standard Project Onboarding", "Video Production"
+  description String?
+  isDefault   Boolean  @default(false)  // Default template for new projects
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  
+  items       ChecklistTemplateItem[]
+}
+
+// =============================================================================
+// CHECKLIST TEMPLATE ITEM MODEL - Items within a template
+// =============================================================================
+model ChecklistTemplateItem {
+  id          String   @id @default(cuid())
+  templateId  String
+  template    ChecklistTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  
+  title       String   // e.g., "Contract signed", "Assets received"
+  description String?  // Detailed instructions/requirements
+  required    Boolean  @default(true)   // Must be done/waived before production
+  defaultOwner String  @default("grizzle")  // "grizzle" | "client"
+  sortOrder   Int      @default(0)
+  
+  createdAt   DateTime @default(now())
+  
+  @@index([templateId])
+}
+
+// =============================================================================
+// CHECKLIST ITEM MODEL - Project-specific checklist items (instantiated from template)
+// =============================================================================
+model ChecklistItem {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  
+  // Item details (copied from template but can be customized)
+  title       String
+  description String?
+  required    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  
+  // Status tracking
+  status      String   @default("missing")  // missing | in_progress | done | waived
+  owner       String   @default("grizzle")  // grizzle | client
+  dueDate     DateTime?
+  
+  // Evidence/completion
+  evidenceUrl String?   // Link to proof (file, email, etc.)
+  waivedReason String?  // Reason if status is "waived"
+  
+  // Audit trail
+  completedAt DateTime?
+  completedBy String?   // Name/ID of person who completed
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  
+  @@index([projectId])
+}
